@@ -79,7 +79,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
             soup = BeautifulSoup(html_stuff, "html.parser")
 
             # Find all table data rows (tr)
-            rows = soup.find("table").find("tbody").find_all("tr")
+            rows = soup.find("table").find("tbody").find_all("tr") # type: ignore
 
             # The first row is the header, so we skip it (index 0)
             data_rows = rows[1:]
@@ -96,7 +96,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
                 a_tag = row.find("a", onclick=True)
                 if a_tag and "onclick" in a_tag.attrs:
                     onclick_content = a_tag["onclick"]
-                    match = re.search(pattern, onclick_content)
+                    match = re.search(pattern, onclick_content) # type: ignore
                     if match:
                         extracted_links.append(match.group(1))
                         # Convert the extracted string boolean ("true" or "false") to a Python boolean
@@ -113,6 +113,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
                 df["is_get_request"] = extracted_booleans
         elif input_type == 'json':
             # TODO
+            pass
         
     # all done!
     logger.info("Done building dataframe")
