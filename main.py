@@ -1,6 +1,7 @@
 import logging
 import os
 import argparse
+from snapmemories.core import download_memories
 
 # import the main code
 
@@ -67,3 +68,8 @@ def main():
     logger.info(f"Saving to {args.output_dir}")
     if args.pickup:
         logger.info(f"Using {args.pickup_file} as a pickup file")
+
+    download_memories(args.input_type, args.input_path, args.output_dir, args.pickup, args.pickup_file)
+
+if __name__ == "__main__":
+    main()
