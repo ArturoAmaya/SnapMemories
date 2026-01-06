@@ -3,10 +3,10 @@ Snapchat is now charging for memories storage space. There's tons of pictures up
 
 
 # Roadmap
-- [ ] Parse html
+- [x] Parse html
 - [ ] Parse json
-- [ ] Create dataframe with relevant metadata
-- [ ] Split dataframe into chunks
+- [x] Create dataframe with relevant metadata
+- [x] Split dataframe into chunks
 - [ ] Process each chunk:
 - [ ] Download image
 - [ ] Change metadata
