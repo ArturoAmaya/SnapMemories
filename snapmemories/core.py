@@ -2,12 +2,13 @@ import logging
 import pandas as pd
 import logging
 from io import StringIO
-from utils import extract_coordinates, get_downloaded_files
+from utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks
 import re
 from bs4 import BeautifulSoup
 import os
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np
+from functools import partial
 
 logger = logging.getLogger(__file__)
 
@@ -167,6 +168,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     pool_size = os.cpu_count() - 2 # type: ignore idk I don't want to use the whole machine
     chunks = np.array_split(df, pool_size)
     
+    download_worker_f = partial(download_dataframe_chunks, output_dir=output_dir)
     with ProcessPoolExecutor() as executor:
-        results = list(executor.map(download_dataframe_chunk, chunks))
+        results = list(executor.map(download_worker_f, chunks))
     
