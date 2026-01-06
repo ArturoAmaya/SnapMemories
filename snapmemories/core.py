@@ -151,9 +151,9 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
             _, ext = os.path.splitext(os.path.basename(fp))
 
             # update
-            df.loc[i, "file_path"] = fp
-            df.loc[i, "is_zip"] = ext == ".zip"
-            df.loc[i, "is_extracted"] = "extracted" in file
+            df.loc[i, "file_path"] = fp # type: ignore
+            df.loc[i, "is_zip"] = ext == ".zip" # type: ignore
+            df.loc[i, "is_extracted"] = "extracted" in file # type: ignore
 
             logger.info(f"Skipping row {i}: File already downloaded: '{fp}'")
             continue

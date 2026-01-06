@@ -45,22 +45,6 @@ def get_downloaded_files(output_dir:str)->Dict[str, str]:
             downloaded[file] = os.path.join(output_dir, fp)
     return downloaded
 
-def download_row(row, output_dir):
-    try:
-        response = fetch_response(row["download_link"], row["is_get_request"])
-
-        ext = get_ext(response)
-
-        is_zip = False
-        if ext == ".zip":
-            is_zip = True
-        
-        fp = f"{row["file_name"]}{ext}"
-
-    except:
-        pass
-
-    return stuff
 
 def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str):
     def download_row(row, output_dir):
