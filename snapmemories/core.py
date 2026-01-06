@@ -2,9 +2,12 @@ import logging
 import pandas as pd
 import logging
 from io import StringIO
-from utils import extract_coordinates
+from utils import extract_coordinates, get_downloaded_files
 import re
 from bs4 import BeautifulSoup
+import os
+from concurrent.futures import ProcessPoolExecutor
+import numpy as np
 
 logger = logging.getLogger(__file__)
 
@@ -117,8 +120,53 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
         
     # all done!
     logger.info("Done building dataframe")
+    logger.info("-"*50)
     return df # type: ignore
 
 
 def download_memories(input_type:str, input_path:str, output_dir:str, pickup:bool = False, pickup_file:str = ""):
+    
+    # make sure the output dir exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # log the start
+    logger.info("Starting")
+
+
+    # build the dataframe
     df = build_dataframe(input_type, input_path, output_dir, pickup, pickup_file)
+
+    # at this point all the entries have metadata, may/not be downloaded, may/not be metadata updated, may/not be overlayed
+    # so check the table see if any have not been downloaded
+    # first make a list of what's been downloaded and compare then to the table
+    already_downloaded = get_downloaded_files(output_dir)
+    logger.info(f"Already downloaded {len(already_downloaded)} files")
+
+    for i, row in df.iterrows():
+        file = row["file_name"]
+
+        if file in already_downloaded:
+            fp = already_downloaded[file]
+            _, ext = os.path.splitext(os.path.basename(fp))
+
+            # update
+            df.loc[i, "file_path"] = fp
+            df.loc[i, "is_zip"] = ext == ".zip"
+            df.loc[i, "is_extracted"] = "extracted" in file
+
+            logger.info(f"Skipping row {i}: File already downloaded: '{fp}'")
+            continue
+
+        # also check for missing download links
+        if not row["download_link"]:
+            logger.warning(f"No download link for row {i}")
+        continue
+    # ok cool now we know what's downloaded and whats not let's go grab everything that's not been downloaded and download it
+    not_downloaded = df[df["file_path"].isna() and df["download_link"].notna()]
+
+    pool_size = os.cpu_count() - 2 # type: ignore idk I don't want to use the whole machine
+    chunks = np.array_split(df, pool_size)
+    
+    with ProcessPoolExecutor() as executor:
+        results = list(executor.map(download_dataframe_chunk, chunks))
+    
