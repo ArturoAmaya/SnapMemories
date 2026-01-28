@@ -5,7 +5,7 @@ from src.core import download_memories
 
 # import the main code
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", filename='', filemode='a')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", filename='snap_mems.log', filemode='a')
 logger = logging.getLogger(__file__)
 
 def main():
