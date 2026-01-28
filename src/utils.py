@@ -70,7 +70,7 @@ def get_downloaded_files(output_dir:str)->Dict[str, str]:
         # check if its not a system file
         if not (fp.startswith(".") or fp.startswith("__MACOSX")):
             # do stuff
-            file, _ = os.path.split(fp)
+            file, _ = os.path.splitext(fp)
             downloaded[file] = os.path.join(output_dir, fp)
     return downloaded
 
