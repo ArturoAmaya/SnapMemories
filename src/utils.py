@@ -6,6 +6,9 @@ import pandas as pd
 from functools import partial
 import requests
 from tqdm import tqdm
+import zipfile
+import shutil
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 logger = logging.getLogger(__file__)
 tqdm.pandas()
@@ -74,7 +77,88 @@ def get_downloaded_files(output_dir:str)->Dict[str, str]:
             downloaded[file] = os.path.join(output_dir, fp)
     return downloaded
 
+def _unzips(df:pd.DataFrame, output_dir:str):
+    def is_system_file(file_name):
+        return file_name.startswith('__MACOSX') or file_name.startswith('.')
+    """Unzip the zip files"""
+    # credit to snapchat-memories-downloader
 
+    # only keep the zips
+    zip_df = df[df["zip"] == True]
+
+    unzipped = 0
+    new_rows = []
+    total_tounzip = len(zip_df)
+
+    errors = []
+
+    with logging_redirect_tqdm():
+        with tqdm(total=total_tounzip, desc="Unzipping") as pbar:
+            for index, row in zip_df.iterrows():
+                zip_file_path = row["file_path"]
+                zip_file_name = row["file_name"]
+                # Use the file name (without .zip) as the temporary extraction folder name
+                temp_extract_dir = os.path.join(output_dir, f"temp_{zip_file_name}")
+
+                try:
+                    # Extract the ZIP file
+                    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+                        # Create the temporary directory inside the download folder
+                        os.makedirs(temp_extract_dir, exist_ok=True)
+                        zip_ref.extractall(temp_extract_dir)
+                        logger.debug(f"Successfully extracted to: '{temp_extract_dir}'")
+
+                    # Process extracted files, rename, and move
+                    extracted_files_count = 0
+                    for root, _, extractable_files in os.walk(temp_extract_dir):
+                        for i, extractable_file_name in enumerate(extractable_files):
+                            # Ignore macOS resource files or system files
+                            if is_system_file(extractable_file_name):
+                                continue
+
+                            # Extract file path in temp directory
+                            extractable_file_path = os.path.join(root, extractable_file_name)
+                            _, extension = os.path.splitext(extractable_file_name)
+
+                            # Final file name to use for extracted file (zip_filename_extracted_index+1)
+                            final_extracted_base_file_path = f"{zip_file_name}_extracted_{i + 1}{extension}"
+                            final_extracted_file_path = os.path.join(output_dir, final_extracted_base_file_path)
+
+                            # Move the file to the parent download directory
+                            shutil.move(extractable_file_path, final_extracted_file_path)
+
+                            # Creating new row entry for dataframe
+                            new_row = row.copy()
+                            new_row["file_name"] = os.path.splitext(final_extracted_base_file_path)[0]  # without extension
+                            new_row["file_path"] = final_extracted_file_path
+                            new_row["is_zip"] = False
+                            new_row["is_extracted"] = True  # Keeping track of extracted memories
+                            new_rows.append(new_row)
+
+                            extracted_files_count += 1
+
+                    unzipped += 1
+                    logger.info(
+                        f"[{unzipped}/{total_tounzip}] Successfully moved {extracted_files_count} files to '{output_dir}'."
+                    )
+
+                except zipfile.BadZipFile as e:
+                    logger.error(f"Error: The downloaded file '{zip_file_path}' is not a valid ZIP file.")
+                    errors.append({"index": index, "error": str(e)})
+                    pbar.set_postfix(failed=len(errors))
+
+                except Exception as e:
+                    logger.error(f"Error processing ZIP file '{zip_file_path}': {e}")
+                    errors.append({"index": index, "error": str(e)})
+                    pbar.set_postfix(failed=len(errors))
+                finally:
+                    # Clean up the temporary folder
+                    if os.path.exists(temp_extract_dir):
+                        shutil.rmtree(temp_extract_dir)
+                        logger.debug(f"Deleted temporary folder: {temp_extract_dir}")
+                    pbar.update(1)
+    if errors:
+        print(f"\nFinished with {len(errors)} failures.")
 def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error_log):
 
     for index, row in chunk.iterrows():

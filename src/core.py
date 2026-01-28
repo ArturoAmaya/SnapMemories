@@ -2,7 +2,7 @@ import logging
 import pandas as pd
 import logging
 from io import StringIO
-from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks
+from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks, _unzips
 import re
 from bs4 import BeautifulSoup
 import os
@@ -211,3 +211,29 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
         print("Detailed error log saved to failed_downloads.csv")
     print(final_df)
     final_df.to_csv("progress.csv", index=False)
+
+    # keep it simple stupid
+    df = final_df
+
+    # next you have to extract the zip files
+    logger.info(f"Total zip files: {df[df["zip"] == True].shape[0]}")
+    logger.info('-' * 50)
+    logger.info("EXTRACTING ZIPS")
+    logger.info('-' * 50)
+
+    _unzips(df, output_dir)
+
+    # next add the metadata
+    logger.info("-" * 50)
+    logger.info("** UPDATING METADATA **")
+    logger.info("-" * 50)
+
+    # Updating media's metadata to fix capture time and location
+    _update_memories_metadata(df)
+
+    logger.info("-" * 50)
+    logger.info("** DONE **")
+    logger.info("-" * 50)
+
+    # then combine overlays (this part might make me cry but we've made a lot of progress today)
+
