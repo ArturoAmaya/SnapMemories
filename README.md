@@ -19,3 +19,4 @@ Snapchat is now charging for memories storage space. There's tons of pictures up
 - [ ] retry logic for fetch response
 - [ ] Cleanup file function for after downloading everything
 - [ ] Clean up code
+- [ ] Add INFO logger statements for the stuff I've written recently
