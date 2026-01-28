@@ -177,7 +177,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     total_rows = len(not_downloaded)
     shared_error_log = manager.list()
 
-    pool_size = min(9, os.cpu_count() - 2) # type: ignore idk I don't want to use the whole machine
+    pool_size = min(9, os.cpu_count() - 4) # type: ignore idk I don't want to use the whole machine
     chunks = np.array_split(not_downloaded, pool_size)
     
 
@@ -202,11 +202,12 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
             pbar.update(total_rows - last_val)
     
     results = [f.result() for f in futures]
-    final_df = pd.concat(results)
+    final_df = pd.concat([df, pd.concat(results)])
     final_df.sort_index(axis=1, ascending=False, inplace=True)
     if shared_error_log:
         print(f"\n⚠️ {len(shared_error_log)} downloads failed.")
         errors_df = pd.DataFrame(list(shared_error_log))
         errors_df.to_csv("failed_downloads.csv", index=False)
         print("Detailed error log saved to failed_downloads.csv")
-    print(df)
+    print(final_df)
+    final_df.to_csv("progress.csv", index=False)
