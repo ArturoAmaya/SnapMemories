@@ -159,7 +159,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
 
             # update
             df.loc[i, "file_path"] = fp # type: ignore
-            df.loc[i, "is_zip"] = ext == ".zip" # type: ignore
+            df.loc[i, "zip"] = ext == ".zip" # type: ignore
             df.loc[i, "is_extracted"] = "extracted" in file # type: ignore
 
             logger.info(f"Skipping row {i}: File already downloaded: '{fp}'")
@@ -203,7 +203,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     
     results = [f.result() for f in futures]
     final_df = pd.concat([df, pd.concat(results)])
-    final_df.sort_index(axis=1, ascending=False, inplace=True)
+    final_df.sort_values(by='timestamp', ascending=False, inplace=True, ignore_index=True)
     if shared_error_log:
         print(f"\n⚠️ {len(shared_error_log)} downloads failed.")
         errors_df = pd.DataFrame(list(shared_error_log))

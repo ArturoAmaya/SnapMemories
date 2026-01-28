@@ -22,3 +22,4 @@ Snapchat is now charging for memories storage space. There's tons of pictures up
 - [ ] Add INFO logger statements for the stuff I've written recently
 - [ ] Add ungraceful exit handling
 - [x] Make the dataframe recognize already downloaded files
+- [ ] extract zip files

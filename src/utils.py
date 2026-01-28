@@ -91,11 +91,11 @@ def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error
                     f.write(stream_chunk)
             
             # Write results back to the chunk using the index
-            chunk.at[index, 'is_zip'] = is_zip # type: ignore
+            chunk.at[index, 'zip'] = is_zip # type: ignore
             chunk.at[index, 'file_path'] = file_path # type: ignore
 
         except Exception as e:
-            chunk.at[index, 'is_zip'] = None # type: ignore
+            chunk.at[index, 'zip'] = None # type: ignore
             chunk.at[index, 'file_path'] = None # type: ignore
 
             # Log the specific error along with the file name/ID
