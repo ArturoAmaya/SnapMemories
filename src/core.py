@@ -73,8 +73,9 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
         # add zip check
         df["zip"] = None
 
-        # add extracted check
-        df["extracted"] = None
+        # add extracted check, a is_an_extract and a been_extracted
+        df["been_extracted"] = None
+        df["is_an_extract"] = None
 
         def _extractcoords(d):
             lat, long = extract_coordinates(d['coords'])
@@ -222,6 +223,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     logger.info('-' * 50)
 
     _unzips(df, output_dir)
+    df.to_csv("progress.csv", index=False)
 
     # next add the metadata
     logger.info("-" * 50)
