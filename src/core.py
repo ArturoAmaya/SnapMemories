@@ -12,6 +12,11 @@ from functools import partial
 from tqdm import tqdm
 import multiprocessing
 
+import warnings
+
+# Filter out all FutureWarnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 logger = logging.getLogger(__file__)
 
 def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool = False, pickup_file:str = "")->pd.DataFrame:
