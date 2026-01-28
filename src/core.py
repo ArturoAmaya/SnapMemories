@@ -2,13 +2,14 @@ import logging
 import pandas as pd
 import logging
 from io import StringIO
-from utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks
+from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks
 import re
 from bs4 import BeautifulSoup
 import os
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 from functools import partial
+from tqdm import tqdm
 
 logger = logging.getLogger(__file__)
 
@@ -45,7 +46,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
             df.columns[0]: 'epoch_str',
             df.columns[1]: 'media_type',
             df.columns[2]: 'coords',
-            df.columns[4]: 'download_link'
+            df.columns[3]: 'download_link'
         }
         )
 
@@ -55,7 +56,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
         df["timestamp"] = df["epoch_str"].apply(lambda time_str: int(pd.to_datetime(time_str, utc=True).timestamp()) * 1000)
 
         # correct the media type: make it all consistent and file-name friendly
-        df["media_type"] = df["media_type"].apple(lambda media_str: media_str.replace(' ', '_').lower())
+        df["media_type"] = df["media_type"].apply(lambda media_str: media_str.replace(' ', '_').lower())
 
         # add file name
         df["file_name"] = None
@@ -70,7 +71,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
         df["extracted"] = None
 
         def _extractcoords(d):
-            lat, long = extract_coordinates(d['coordinates'])
+            lat, long = extract_coordinates(d['coords'])
             d['lat'] = lat
             d['long'] = long
             return d
@@ -112,9 +113,9 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
                     extracted_links.append(None)
                     extracted_booleans.append(None)
 
-                # Add the new columns to the DataFrame
-                df["download_link"] = extracted_links
-                df["is_get_request"] = extracted_booleans
+            # Add the new columns to the DataFrame
+            df["download_link"] = extracted_links
+            df["is_get_request"] = extracted_booleans
         elif input_type == 'json':
             # TODO
             pass
@@ -163,12 +164,15 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
             logger.warning(f"No download link for row {i}")
         continue
     # ok cool now we know what's downloaded and whats not let's go grab everything that's not been downloaded and download it
-    not_downloaded = df[df["file_path"].isna() and df["download_link"].notna()]
+    not_downloaded = df[(df["file_path"].isna()) & (df["download_link"].notna())]
 
     pool_size = os.cpu_count() - 2 # type: ignore idk I don't want to use the whole machine
     chunks = np.array_split(df, pool_size)
     
     download_worker_f = partial(download_dataframe_chunks, output_dir=output_dir)
     with ProcessPoolExecutor() as executor:
-        results = list(executor.map(download_worker_f, chunks))
+        download_results = list(tqdm(executor.map(download_worker_f, chunks), total=len(chunks), desc="Downloading database chunks"))
+        df = pd.concat(download_results, ignore_index=True)
     
+    df.sort_index(axis=1, ascending=False)
+    print(df)

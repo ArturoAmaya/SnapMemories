@@ -4,9 +4,36 @@ import logging
 import os
 import pandas as pd
 from functools import partial
+import requests
 
 logger = logging.getLogger(__file__)
 
+def _fetch_response(link: str, get_req:bool)->requests.Response:
+    """Get the contents of the URL"""
+    if get_req:
+        # again, mostly cribbed from snapchat-memories-adder. In retrospect this could probably have been a fork
+        head={"X-Snap-Route-Tag": "mem-dmd", "User-Agent": "Mozilla/5.0"}
+        resp = requests.get(link, headers=head, stream=True)
+    else:
+        # TODO
+        print(f"error with {link} it's a post request")
+    resp.raise_for_status()
+    return resp
+
+def get_ext(resp: requests.Response)->str:
+    """Figure out what kind of file it is"""
+    # again, cribbed from snapchat-memories-downloader. Figured out that the filename is in the content-disposition header
+    content_disp = resp.headers.get("Content-Disposition")
+    extension = ""
+
+    if content_disp:
+        # Attempt to extract file name from header
+        match = re.search(r'filename="?([^"]+)"?', content_disp)
+        if match:
+            base_fp = match.group(1)
+            _, extension = os.path.splitext(base_fp)
+            extension = extension.lower() if extension else ".dat"
+    return extension
 
 def extract_coordinates(coords: str)->Tuple[float,float]:
     """
@@ -49,7 +76,7 @@ def get_downloaded_files(output_dir:str)->Dict[str, str]:
 def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str):
     def download_row(row, output_dir):
         try:
-            response = fetch_response(row["download_link"], row["is_get_request"])
+            response = _fetch_response(row["download_link"], row["is_get_request"])
 
             ext = get_ext(response)
 
@@ -76,4 +103,5 @@ def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str):
                 'file_path': None
             })
 
-    chunk["return_stuff"] = chunk.apply(download_row, axis=1)
+    chunk[['is_zip', 'file_path']] = chunk.apply(download_row, output_dir=output_dir, axis=1, result_type="expand")
+    return chunk
