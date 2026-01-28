@@ -5,8 +5,10 @@ import os
 import pandas as pd
 from functools import partial
 import requests
+from tqdm import tqdm
 
 logger = logging.getLogger(__file__)
+tqdm.pandas()
 
 def _fetch_response(link: str, get_req:bool)->requests.Response:
     """Get the contents of the URL"""
@@ -73,35 +75,70 @@ def get_downloaded_files(output_dir:str)->Dict[str, str]:
     return downloaded
 
 
-def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str):
-    def download_row(row, output_dir):
+def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error_log):
+
+    for index, row in chunk.iterrows():
         try:
             response = _fetch_response(row["download_link"], row["is_get_request"])
-
             ext = get_ext(response)
-
-            is_zip = False
-            if ext == ".zip":
-                is_zip = True
-        
-            fp = f"{row["file_name"]}{ext}"
-
+            
+            is_zip = (ext == ".zip")
+            fp = f"{row['file_name']}{ext}"
             file_path = os.path.join(output_dir, fp)
 
             with open(file_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            # return an updated Series
-            return pd.Series({
-                'is_zip': is_zip,
-                'file_path': file_path
-            })
+                for stream_chunk in response.iter_content(chunk_size=8192):
+                    f.write(stream_chunk)
+            
+            # Write results back to the chunk using the index
+            chunk.at[index, 'is_zip'] = is_zip # type: ignore
+            chunk.at[index, 'file_path'] = file_path # type: ignore
 
-        except:
-            return pd.Series({
-                'is_zip': None,
-                'file_path': None
-            })
+        except Exception as e:
+            chunk.at[index, 'is_zip'] = None # type: ignore
+            chunk.at[index, 'file_path'] = None # type: ignore
 
-    chunk[['is_zip', 'file_path']] = chunk.apply(download_row, output_dir=output_dir, axis=1, result_type="expand")
+            # Log the specific error along with the file name/ID
+            error_info = {
+                "file_name": row.get("file_name", "Unknown"),
+                "error": str(e),
+                "link": row.get("download_link", "N/A")
+            }
+            error_log.append(error_info)
+        
+        finally:
+            # Increment the shared counter by 1
+            counter.value += 1
     return chunk
+    
+    #def download_row(row, output_dir):
+    #    try:
+    #        response = _fetch_response(row["download_link"], row["is_get_request"])
+
+    #        ext = get_ext(response)
+
+    #        is_zip = False
+    #        if ext == ".zip":
+    #            is_zip = True
+        
+    #        fp = f"{row["file_name"]}{ext}"
+
+    #        file_path = os.path.join(output_dir, fp)
+
+    #        with open(file_path, "wb") as f:
+    #            for chunk in response.iter_content(chunk_size=8192):
+    #                f.write(chunk)
+            # return an updated Series
+    #        return pd.Series({
+    #            'is_zip': is_zip,
+    #            'file_path': file_path
+    #        })
+
+    #    except:
+    #        return pd.Series({
+    #            'is_zip': None,
+    #            'file_path': None
+    #        })
+
+    #chunk[['is_zip', 'file_path']] = chunk.progress_apply(download_row, output_dir=output_dir, axis=1, result_type="expand") #type:ignore apparently pylance freaks out because progress_apply doesn't exist statically
+    #return chunk

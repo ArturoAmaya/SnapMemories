@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 from functools import partial
 from tqdm import tqdm
+import multiprocessing
 
 logger = logging.getLogger(__file__)
 
@@ -59,7 +60,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
         df["media_type"] = df["media_type"].apply(lambda media_str: media_str.replace(' ', '_').lower())
 
         # add file name
-        df["file_name"] = None
+        df["file_name"] =  df.apply(lambda r: f"{r.name:05d}_{r['timestamp']}_{r['media_type']}", axis=1)
 
         # add file path
         df["file_path"] = None
@@ -166,13 +167,41 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     # ok cool now we know what's downloaded and whats not let's go grab everything that's not been downloaded and download it
     not_downloaded = df[(df["file_path"].isna()) & (df["download_link"].notna())]
 
-    pool_size = os.cpu_count() - 2 # type: ignore idk I don't want to use the whole machine
-    chunks = np.array_split(df, pool_size)
+    manager = multiprocessing.Manager()
+    shared_counter = manager.Value('i', 0)
+    total_rows = len(not_downloaded)
+    shared_error_log = manager.list()
+
+    pool_size = min(9, os.cpu_count() - 2) # type: ignore idk I don't want to use the whole machine
+    chunks = np.array_split(not_downloaded, pool_size)
     
+
     download_worker_f = partial(download_dataframe_chunks, output_dir=output_dir)
     with ProcessPoolExecutor() as executor:
-        download_results = list(tqdm(executor.map(download_worker_f, chunks), total=len(chunks), desc="Downloading database chunks"))
-        df = pd.concat(download_results, ignore_index=True)
+        #download_results = list(tqdm(executor.map(download_worker_f, chunks), total=len(chunks), desc="Downloading database chunks"))
+        #df = pd.concat(download_results, ignore_index=True)
+        # Use enumerate to get an index for each chunk to act as the worker_id
+        # this straight up came from gemini I hope it's decent
+        futures = [executor.submit(download_dataframe_chunks, c, output_dir, shared_counter, shared_error_log) for c in chunks] # type: ignore
     
-    df.sort_index(axis=1, ascending=False)
+        with tqdm(total=total_rows, desc="Total Downloads") as pbar:
+            last_val = 0
+            # While any worker is still running
+            while any(f.running() for f in futures):
+                current_val = shared_counter.value
+                pbar.set_postfix({"failed": len(shared_error_log)})
+                pbar.update(current_val - last_val)
+                last_val = current_val
+            
+            # Final update to hit 100%
+            pbar.update(total_rows - last_val)
+    
+    results = [f.result() for f in futures]
+    final_df = pd.concat(results)
+    final_df.sort_index(axis=1, ascending=False, inplace=True)
+    if shared_error_log:
+        print(f"\n⚠️ {len(shared_error_log)} downloads failed.")
+        errors_df = pd.DataFrame(list(shared_error_log))
+        errors_df.to_csv("failed_downloads.csv", index=False)
+        print("Detailed error log saved to failed_downloads.csv")
     print(df)
