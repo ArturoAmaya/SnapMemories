@@ -23,3 +23,5 @@ Snapchat is now charging for memories storage space. There's tons of pictures up
 - [ ] Add ungraceful exit handling
 - [x] Make the dataframe recognize already downloaded files
 - [ ] extract zip files
+- [ ] Track in already downloaded the difference between extracted files and "pure" downloads
+- [ ] TODO fix why the numbers of files to be downloaded n such keep changing (suspect its because it counts .zips and extracted files but those shouldn't be downlaoded)
