@@ -1,7 +1,7 @@
 import logging
 import os
 import argparse
-from snapmemories.core import download_memories
+from src.core import download_memories
 
 # import the main code
 
@@ -19,19 +19,22 @@ def main():
     
     # argument 1 (required) input file type
     parser.add_argument("--input_type",
-                        choice=['json', 'html'],
+                        choices=['json', 'html'],
                         help='Specify the input file type, json or html. Defaults to html.',
-                        default='html')
+                        default='html',
+                        required=True)
     
     # argument 2 (required) input file path
-    parser.add_argument("-i", "input_path",
+    parser.add_argument("-i", "--input_path",
                         type=str,
-                        help="Specify the input file path.")
+                        help="Specify the input file path.",
+                        required=True)
     
     # argument 3 (required) output directory
     parser.add_argument("-o", "--output_dir",
                         type=str,
-                        help="Path to where the files will be downloaded.")
+                        help="Path to where the files will be downloaded.",
+                        required=True)
     
     # argument 4 (optional) pick up
     parser.add_argument("-p", "--pickup",
