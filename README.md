@@ -7,7 +7,15 @@ Snapchat is now charging for memories storage space. There's tons of pictures up
 - [ ] Parse json
 - [x] Create dataframe with relevant metadata
 - [x] Split dataframe into chunks
-- [ ] Process each chunk:
-- [ ] Download image
+- [x] Process each chunk:
+- [x] Download image
 - [ ] Change metadata
 - [ ] Change name
+
+## Specific TODOs
+- [ ] build_dataframe pickup logic
+- [ ] test with json input
+    - [ ] add beautiful soup-equivalent logic for parsing from json file
+- [ ] retry logic for fetch response
+- [ ] Cleanup file function for after downloading everything
+- [ ] Clean up code
