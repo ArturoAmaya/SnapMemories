@@ -107,7 +107,6 @@ def _unzips(df:pd.DataFrame, output_dir:str):
                         os.makedirs(temp_extract_dir, exist_ok=True)
                         zip_ref.extractall(temp_extract_dir)
                         logger.debug(f"Successfully extracted to: '{temp_extract_dir}'")
-                        zip_df.at[index, 'been_extracted'] = True #type:ignore make sure the original zip is logged as extracted in the progress dataframe
 
                     # Process extracted files, rename, and move
                     extracted_files_count = 0
@@ -132,7 +131,8 @@ def _unzips(df:pd.DataFrame, output_dir:str):
                             new_row = row.copy()
                             new_row["file_name"] = os.path.splitext(final_extracted_base_file_path)[0]  # without extension
                             new_row["file_path"] = final_extracted_file_path
-                            new_row["is_zip"] = False
+                            new_row["zip"] = False
+                            new_row["been_extracted"] = False
                             new_row["is_an_extract"] = True  # Keeping track of extracted memories
                             new_rows.append(new_row)
 
@@ -164,6 +164,7 @@ def _unzips(df:pd.DataFrame, output_dir:str):
         df.loc[len(df)] = new_row
 
     logger.info(f"Added {len(new_rows)} new memories to dataframe!")
+    return zip_df
 def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error_log):
 
     for index, row in chunk.iterrows():
@@ -183,11 +184,14 @@ def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error
             chunk.at[index, 'zip'] = is_zip # type: ignore
             chunk.at[index, 'file_path'] = file_path # type: ignore
             chunk.at[index, 'been_extracted'] = False #type: ignore
+            chunk.at[index, 'is_an_extract'] = False #type: ignore
 
         except Exception as e:
             chunk.at[index, 'zip'] = None # type: ignore
             chunk.at[index, 'file_path'] = None # type: ignore
             chunk.at[index, 'been_extracted'] = None #type: ignore
+            chunk.at[index, 'is_an_extract'] = None #type: ignore
+
 
             # Log the specific error along with the file name/ID
             error_info = {

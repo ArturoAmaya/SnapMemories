@@ -18,6 +18,8 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 logger = logging.getLogger(__file__)
+shortened = True
+
 
 def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool = False, pickup_file:str = "")->pd.DataFrame:
     
@@ -145,6 +147,9 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     # build the dataframe
     df = build_dataframe(input_type, input_path, output_dir, pickup, pickup_file)
 
+    if shortened:
+        df = df.head(500)
+
     # at this point all the entries have metadata, may/not be downloaded, may/not be metadata updated, may/not be overlayed
     # so check the table see if any have not been downloaded
     # first make a list of what's been downloaded and compare then to the table
@@ -161,7 +166,8 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
             # update
             df.loc[i, "file_path"] = fp # type: ignore
             df.loc[i, "zip"] = ext == ".zip" # type: ignore
-            df.loc[i, "is_extracted"] = "extracted" in file # type: ignore
+            df.loc[i, "is_an_extract"] = "extracted" in file # type: ignore
+            # TODO the "been_extracted" flag (probably check that the file without extracted exists, roughly)    
 
             logger.info(f"Skipping row {i}: File already downloaded: '{fp}'")
             continue
@@ -203,18 +209,15 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
             pbar.update(total_rows - last_val)
     
     results = [f.result() for f in futures]
-    final_df = pd.concat([df, pd.concat(results)])
-    final_df.sort_values(by='timestamp', ascending=False, inplace=True, ignore_index=True)
+    df.update(pd.concat(results))
+    df.sort_values(by='timestamp', ascending=False, inplace=True, ignore_index=True)
     if shared_error_log:
         print(f"\n⚠️ {len(shared_error_log)} downloads failed.")
         errors_df = pd.DataFrame(list(shared_error_log))
         errors_df.to_csv("failed_downloads.csv", index=False)
         print("Detailed error log saved to failed_downloads.csv")
-    print(final_df)
-    final_df.to_csv("progress.csv", index=False)
-
-    # keep it simple stupid
-    df = final_df
+    print(df)
+    df.to_csv("progress.csv", index=False)
 
     # next you have to extract the zip files
     logger.info(f"Total zip files: {df[df["zip"] == True].shape[0]}")
@@ -222,7 +225,8 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     logger.info("EXTRACTING ZIPS")
     logger.info('-' * 50)
 
-    _unzips(df, output_dir)
+    df_zip = _unzips(df, output_dir)
+    df.update(df_zip)
     df.to_csv("progress.csv", index=False)
 
     # next add the metadata
