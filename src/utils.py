@@ -13,6 +13,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from exiftool import ExifToolHelper
 from timezonefinder import TimezoneFinder
+import subprocess
+import glob
+from pathlib import Path
 
 
 logger = logging.getLogger(__file__)
@@ -150,6 +153,7 @@ def _unzips(df:pd.DataFrame, output_dir:str):
                             new_row["zip"] = False
                             new_row["been_extracted"] = False
                             new_row["is_an_extract"] = True  # Keeping track of extracted memories
+                            new_row["metadata_updated"] = False
                             new_rows.append(new_row)
 
                             extracted_files_count += 1
@@ -202,12 +206,14 @@ def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error
             chunk.at[index, 'file_path'] = file_path # type: ignore
             chunk.at[index, 'been_extracted'] = False #type: ignore
             chunk.at[index, 'is_an_extract'] = False #type: ignore
+            chunk.at[index, "metadata_updated"] = False #type:ignore
 
         except Exception as e:
             chunk.at[index, 'zip'] = None # type: ignore
             chunk.at[index, 'file_path'] = None # type: ignore
             chunk.at[index, 'been_extracted'] = None #type: ignore
             chunk.at[index, 'is_an_extract'] = None #type: ignore
+            chunk.at[index, 'metadata_updated'] = None #type:ignore
 
 
             # Log the specific error along with the file name/ID
@@ -382,7 +388,7 @@ def _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon):
 
 def _update_memories_metadata(df:pd.DataFrame):
     """Update the metadata using the time and location"""
-    not_zips = df[df["zip"]==False]
+    not_zips = df[(df["zip"]==False) & (df["metadata_updated"]==False)]
     total_updates = len(not_zips)
     completed_updates = 0
 
@@ -400,7 +406,7 @@ def _update_memories_metadata(df:pd.DataFrame):
 
     # don't forget to preserve the original dataframe
     df.update(not_zips)
-    
+
     with logging_redirect_tqdm():
         with tqdm(total=total_updates, desc="Updating metadata") as pbar:
             for i, row in not_zips.iterrows():
@@ -416,8 +422,96 @@ def _update_memories_metadata(df:pd.DataFrame):
 
                     completed_updates += 1
                     logger.info(f"[{completed_updates}/{total_updates}] Successfully updated: '{base_file_path}'")
+                    # TODO: update the dataframe would be nice here
+                    not_zips.at[i, "metadata_updated"] = True #type:ignore
                 except:
                     logger.error(f"Error updating {file_path}, {timestamp_str}")
                 finally:
                     pbar.update(1)
+    df.update(not_zips)
     return df
+
+def get_image_dims(file_path):
+    """Replacement for magick identify -format %wx%h"""
+    cmd = ["magick", "identify", "-format", "%wx%h", str(file_path)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.stdout.strip()
+
+def _overlay_images(df:pd.DataFrame, output_dir_str: str):
+    output_dir = Path(output_dir_str)
+    # Find all potential overlay files (*_1.png and *_2.png)
+    overlay_files = list(output_dir.glob("*_1.webp")) + list(output_dir.glob("*_2.webp")) + list(output_dir.glob("*_1.png")) + list(output_dir.glob("*_2.png")) # TODO should change this to be dataframe based so we can track progress
+    
+    with logging_redirect_tqdm():
+        with tqdm(total=len(overlay_files), desc="Creating overlays") as pbar:
+            for png_file in overlay_files:
+                png_path = Path(png_file)
+                # Get base name (e.g., 00011_1760752281000_image_extracted)
+                base = "_".join(png_path.stem.split("_")[:-1])
+                
+                # Look for background files with the same base
+                # Logic: find files starting with base, case-insensitive extensions, excluding itself
+                bg_extensions = ('.jpg', '.jpeg', '.mpg', '.mov', '.mp4')
+                bg_file = None
+                
+                for match in output_dir.glob(f"{base}_*"):
+                    if match.suffix.lower() in bg_extensions and match.name != png_file:
+                        bg_file = match
+                        break
+                
+                if not bg_file or not bg_file.exists():
+                    print(f"⚠️ Background for {png_file} not found.")
+                    continue
+
+                ext = bg_file.suffix.lower()
+                #print(f"🚀 Processing: {png_file} over {bg_file}...")
+
+                if ext in ['.jpg', '.jpeg']:
+                    # --- IMAGE WORKFLOW ---
+                    output_path = output_dir / f"{base}_merged.jpg"
+                    dims = get_image_dims(bg_file)
+                    
+                    # Composite using ImageMagick
+                    # The '!' in resize forces exact dimensions
+                    subprocess.run([
+                        "magick", str(bg_file),
+                        "(", str(png_path), "-resize", f"{dims}!", ")",
+                        "-composite", str(output_path)
+                    ])
+                    
+                    # Copy Metadata via ExifTool
+                    subprocess.run([
+                        "exiftool", "-overwrite_original", "-tagsFromFile", str(bg_file),
+                        "-d", "%Y:%m:%d %H:%M:%S%:z", "-all:all",
+                        "-DateTimeOriginal<DateTimeOriginal", "-CreateDate<CreateDate",
+                        "-ModifyDate<ModifyDate", "-FileModifyDate<FileModifyDate",
+                        "-OffsetTime<OffsetTime", "-OffsetTimeOriginal<OffsetTimeOriginal",
+                        "-OffsetTimeDigitized<OffsetTimeDigitized", str(output_path)
+                    ])
+
+                else:
+                    # --- VIDEO WORKFLOW ---
+                    output_path = output_dir / f"{base}_merged.mp4"
+                    temp_overlay = "temp_overlay.png"
+                    
+                    # Create cleaned temp overlay
+                    subprocess.run(["magick", str(png_path), temp_overlay])
+                    
+                    # FFmpeg Overlay
+                    subprocess.run([
+                        "ffmpeg", "-hide_banner", "-loglevel", "error",
+                        "-i", str(bg_file), "-i", temp_overlay,
+                        "-filter_complex", "[1:v]scale=rw:rh[ovr];[0:v][ovr]overlay=0:0:format=auto",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "slow", 
+                        "-crf", "18", "-c:a", "copy", str(output_path), "-y"
+                    ])
+                    
+                    # Copy Metadata
+                    subprocess.run([
+                        "exiftool", "-overwrite_original", "-tagsFromFile", 
+                        str(bg_file), "-All:All", str(output_path)
+                    ])
+                    
+                    if os.path.exists(temp_overlay):
+                        os.remove(temp_overlay)
+                pbar.update(1)
