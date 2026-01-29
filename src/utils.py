@@ -9,9 +9,25 @@ from tqdm import tqdm
 import zipfile
 import shutil
 from tqdm.contrib.logging import logging_redirect_tqdm
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from exiftool import ExifToolHelper
+from timezonefinder import TimezoneFinder
+
 
 logger = logging.getLogger(__file__)
 tqdm.pandas()
+
+# Identify the "liars" (PNGs that are actually WebPs)
+# We can do this by checking the first few bytes of the file
+def is_actually_webp(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            sig = f.read(12)
+            # WebP files start with RIFF....WEBP
+            return sig.startswith(b'RIFF') and b'WEBP' in sig
+    except:
+        return False
 
 def _fetch_response(link: str, get_req:bool)->requests.Response:
     """Get the contents of the URL"""
@@ -165,6 +181,7 @@ def _unzips(df:pd.DataFrame, output_dir:str):
 
     logger.info(f"Added {len(new_rows)} new memories to dataframe!")
     return zip_df
+
 def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error_log):
 
     for index, row in chunk.iterrows():
@@ -237,3 +254,170 @@ def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error
 
     #chunk[['is_zip', 'file_path']] = chunk.progress_apply(download_row, output_dir=output_dir, axis=1, result_type="expand") #type:ignore apparently pylance freaks out because progress_apply doesn't exist statically
     #return chunk
+
+def get_local_time_from_location(latitude, longitude, utc_datetime):
+    """
+    Determines the local timezone from coordinates and converts a UTC datetime object 
+    to that local time.
+
+    Args:
+        latitude (float): The latitude of the location.
+        longitude (float): The longitude of the location.
+        utc_datetime (datetime): A timezone-aware datetime object in UTC.
+
+    Returns:
+        datetime: The datetime object converted to the local timezone.
+    """
+    # 1. Determine the timezone name (e.g., 'America/New_York') from coordinates
+    tf = TimezoneFinder()
+    timezone_name = tf.timezone_at(lng=longitude, lat=latitude)
+    
+    if timezone_name is None:
+        return "Could not determine the timezone for the given coordinates."
+
+    # 2. Get the timezone object using zoneinfo
+    try:
+        local_tz = ZoneInfo(timezone_name)
+    except Exception as e:
+        return f"Error creating ZoneInfo object: {e}"
+
+    # 3. Convert the UTC datetime object to the local timezone
+    # Ensure the input datetime is timezone-aware in UTC first
+    if utc_datetime.tzinfo is None:
+        # It's best practice to explicitly make a naive datetime UTC-aware first
+        utc_datetime = utc_datetime.replace(tzinfo=ZoneInfo('UTC'))
+        
+    local_datetime = utc_datetime.astimezone(local_tz)
+
+    return local_datetime, timezone_name
+
+def _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon):
+    """Update the EXIF data using exiftool. Important difference relative to snapchat-memories-downloader is that this
+    one does the timezone offset properly. Without that all the times are set to UTC which is not great when you put it into a library they show up out of order"""
+
+    # structure taken from snapchat-memories-downloader with some structural edits
+    if not os.path.exists(file_path):
+        logger.error(f"File not found: '{file_path}'")
+        return
+
+    # Parse Timestamp
+    try:
+        # Convert timestamp '2025-11-13 22:15:16 UTC' to the required Exif format
+        # make the datetime object not naive, then extract the correct offset using the timezones code
+        dt_object = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S UTC")
+        dt_object.replace(tzinfo=ZoneInfo('UTC'))
+        local_time, tz_name = get_local_time_from_location(lat, lon, dt_object)
+
+        exif_datetime_format = local_time.strftime("%Y:%m:%d %H:%M:%S%:z") # type:ignore lesson learned from be real exporter :cry need to include the : in z otherwise they all freak out
+    except ValueError as e:
+        logger.error(f"Error parsing data for '{file_path}': {e}")
+        return
+
+    # Format the coordinates as D/M/S (or decimal) string with N/S/E/W suffix for GPSCoordinates tag
+    # ExifTool can handle the conversion, but combining them is best for QuickTime
+    gps_coordinate_string = f"{abs(lat)} {'N' if lat >= 0 else 'S'} {abs(lon)} {'E' if lon >= 0 else 'W'}"
+
+    # Prepare Metadata Tags
+    # We use both Date/Time tags to ensure both photo (.jpg) and video (.mp4) files are covered.
+    # ExifTool automatically converts the absolute lat/lon values into the required
+    # degrees, minutes, seconds (DMS) format and sets the reference tags (N/S/E/W).
+    metadata_tags = {
+        # Time and Date tags
+        "XMP:DateTimeOriginal": exif_datetime_format,  # Primary XMP tag for time
+        "XMP:CreateDate": exif_datetime_format,  # Secondary XMP tag
+        "DateTimeOriginal": exif_datetime_format,  # Standard EXIF tag for original time
+        "CreateDate": exif_datetime_format,  # XMP/QuickTime tag (useful for MP4)
+        "ModifyDate": exif_datetime_format,  # Update the file modification date
+
+        # GPS tags (ExifTool automatically calculates DMS from decimal degrees)
+        "XMP:GPSLatitude": lat,
+        "XMP:GPSLongitude": lon,
+        "GPSLatitude": lat,
+        "GPSLongitude": lon,
+
+        # Optional: Set the reference direction explicitly if needed, but ExifTool can derive this
+        # We need this to fix incorrect coordinate derivation by ExifTool
+        "GPSLatitudeRef": 'N' if lat >= 0 else 'S',
+        "GPSLongitudeRef": 'E' if lon >= 0 else 'W',
+
+        # **CRITICAL for MP4 (QuickTime/XMP)** Mac and iPhone still don't show location of video! Need fix!
+        "GPSCoordinates": gps_coordinate_string,  # Writes location in one tag for QuickTime/XMP
+        "Location": gps_coordinate_string,  # Used by some readers
+    }
+
+    # Apply Metadata using pyexiftool
+    base_file_path = os.path.basename(file_path)
+    try:
+        with ExifToolHelper() as et:
+            # The execute method is used for writing. It handles escaping and execution.
+            # -overwrite_original tells ExifTool to directly modify the file.
+            et.execute(
+                "-overwrite_original",
+                # Map Python dictionary keys/values to ExifTool -TAG=VALUE format
+                *[f"-{k}={v}" for k, v in metadata_tags.items()],
+                file_path,
+                "-m"
+            )
+
+        logger.debug(f"Metadata updated successfully using pyexiftool: '{base_file_path}'")
+
+    except FileNotFoundError:
+        logger.error(f"Error: The external **ExifTool utility was not found**.")
+        logger.error("Please ensure ExifTool is installed on your system and available in the PATH.")
+    except Exception as e:
+        logger.error(f"An error occurred during metadata writing for '{base_file_path}': {e}")
+
+    # Changing date of capture to unix timestamp
+    dt_object = pd.to_datetime(timestamp_str, utc=True)
+    unix_timestamp = dt_object.timestamp()
+
+    # Changing the OS-level timestamps
+    try:
+        # Set both access time and modification time to the capture time
+        os.utime(file_path, (unix_timestamp, unix_timestamp))
+        logger.debug(f"OS Filesystem timestamps updated: '{os.path.basename(file_path)}'")
+    except Exception as e:
+        logger.error(f"Failed to update filesystem time for {file_path}: {e}")
+
+
+def _update_memories_metadata(df:pd.DataFrame):
+    """Update the metadata using the time and location"""
+    not_zips = df[df["zip"]==False]
+    total_updates = len(not_zips)
+    completed_updates = 0
+
+    # apparently lots of the pngs here are actually webps
+    with logging_redirect_tqdm():
+        with tqdm(total=total_updates, desc="Fixing pngs/webps") as pbar:
+            for index, row in not_zips.iterrows():
+                old_path = row['file_path']
+                if old_path.endswith('.png') and is_actually_webp(old_path):
+                    new_path = old_path.replace('.png', '.webp')
+                    os.rename(old_path, new_path)
+                    # Update the DataFrame so ExifTool knows the new name
+                    not_zips.at[index, 'file_path'] = new_path #type:ignore
+                pbar.update(1)
+
+    # don't forget to preserve the original dataframe
+    df.update(not_zips)
+    
+    with logging_redirect_tqdm():
+        with tqdm(total=total_updates, desc="Updating metadata") as pbar:
+            for i, row in not_zips.iterrows():
+                try:
+                    file_path = row["file_path"]
+                    timestamp_str = row["epoch_str"]
+                    lat = row["lat"]
+                    lon = row["long"]
+                    base_file_path = os.path.basename(file_path)
+
+                    # Updating media
+                    _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon)
+
+                    completed_updates += 1
+                    logger.info(f"[{completed_updates}/{total_updates}] Successfully updated: '{base_file_path}'")
+                except:
+                    logger.error(f"Error updating {file_path}, {timestamp_str}")
+                finally:
+                    pbar.update(1)
+    return df

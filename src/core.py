@@ -2,7 +2,7 @@ import logging
 import pandas as pd
 import logging
 from io import StringIO
-from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks, _unzips
+from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks, _unzips, _update_memories_metadata
 import re
 from bs4 import BeautifulSoup
 import os
@@ -147,7 +147,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     # build the dataframe
     df = build_dataframe(input_type, input_path, output_dir, pickup, pickup_file)
 
-    if shortened:
+    if shortened and not pickup:
         df = df.head(500)
 
     # at this point all the entries have metadata, may/not be downloaded, may/not be metadata updated, may/not be overlayed
@@ -161,12 +161,14 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
 
         if file in already_downloaded:
             fp = already_downloaded[file]
-            _, ext = os.path.splitext(os.path.basename(fp))
+            name, ext = os.path.splitext(os.path.basename(fp))
 
             # update
+            # TODO skip this if oyu have a pickup file this is already done for you
             df.loc[i, "file_path"] = fp # type: ignore
             df.loc[i, "zip"] = ext == ".zip" # type: ignore
             df.loc[i, "is_an_extract"] = "extracted" in file # type: ignore
+            df.loc[i, "been_extracted"] = True if len([s for s in already_downloaded if name in s])==3 else False #type:ignore # there should be the zip extract1 and extract2
             # TODO the "been_extracted" flag (probably check that the file without extracted exists, roughly)    
 
             logger.info(f"Skipping row {i}: File already downloaded: '{fp}'")
@@ -234,8 +236,8 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     logger.info("** UPDATING METADATA **")
     logger.info("-" * 50)
 
-    # Updating media's metadata to fix capture time and location
-    _update_memories_metadata(df)
+    # Updating media's metadata to fix capture time and location # TODO parallelize this
+    df = _update_memories_metadata(df)
 
     logger.info("-" * 50)
     logger.info("** DONE **")
