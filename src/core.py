@@ -79,7 +79,7 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
         df["been_extracted"] = None
         df["is_an_extract"] = None
 
-        df["metadata_update"] = None
+        df["metadata_updated"] = None
 
         def _extractcoords(d):
             lat, long = extract_coordinates(d['coords'])
