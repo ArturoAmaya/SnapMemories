@@ -2,7 +2,7 @@ import logging
 import pandas as pd
 import logging
 from io import StringIO
-from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks, _unzips, _update_memories_metadata
+from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks, _unzips, _update_memories_metadata, _overlay_images
 import re
 from bs4 import BeautifulSoup
 import os
@@ -78,6 +78,8 @@ def build_dataframe(input_type:str, input_path:str, output_dir:str, pickup:bool 
         # add extracted check, a is_an_extract and a been_extracted
         df["been_extracted"] = None
         df["is_an_extract"] = None
+
+        df["metadata_update"] = None
 
         def _extractcoords(d):
             lat, long = extract_coordinates(d['coords'])
@@ -156,28 +158,29 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     already_downloaded = get_downloaded_files(output_dir)
     logger.info(f"Already downloaded {len(already_downloaded)} files")
 
-    for i, row in df.iterrows():
-        file = row["file_name"]
+    if not pickup:
+        for i, row in df.iterrows():
+            file = row["file_name"]
 
-        if file in already_downloaded:
-            fp = already_downloaded[file]
-            name, ext = os.path.splitext(os.path.basename(fp))
+            if file in already_downloaded:
+                fp = already_downloaded[file]
+                name, ext = os.path.splitext(os.path.basename(fp))
 
-            # update
-            # TODO skip this if oyu have a pickup file this is already done for you
-            df.loc[i, "file_path"] = fp # type: ignore
-            df.loc[i, "zip"] = ext == ".zip" # type: ignore
-            df.loc[i, "is_an_extract"] = "extracted" in file # type: ignore
-            df.loc[i, "been_extracted"] = True if len([s for s in already_downloaded if name in s])==3 else False #type:ignore # there should be the zip extract1 and extract2
-            # TODO the "been_extracted" flag (probably check that the file without extracted exists, roughly)    
+                # update
+                # TODO skip this if oyu have a pickup file this is already done for you
+                df.loc[i, "file_path"] = fp # type: ignore
+                df.loc[i, "zip"] = ext == ".zip" # type: ignore
+                df.loc[i, "is_an_extract"] = "extracted" in file # type: ignore
+                df.loc[i, "been_extracted"] = True if len([s for s in already_downloaded if name in s])==3 else False #type:ignore # there should be the zip extract1 and extract2
+                # TODO the "been_extracted" flag (probably check that the file without extracted exists, roughly)    
 
-            logger.info(f"Skipping row {i}: File already downloaded: '{fp}'")
+                logger.info(f"Skipping row {i}: File already downloaded: '{fp}'")
+                continue
+
+            # also check for missing download links
+            if not row["download_link"]:
+                logger.warning(f"No download link for row {i}")
             continue
-
-        # also check for missing download links
-        if not row["download_link"]:
-            logger.warning(f"No download link for row {i}")
-        continue
     # ok cool now we know what's downloaded and whats not let's go grab everything that's not been downloaded and download it
     not_downloaded = df[(df["file_path"].isna()) & (df["download_link"].notna())]
 
@@ -239,9 +242,12 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     # Updating media's metadata to fix capture time and location # TODO parallelize this
     df = _update_memories_metadata(df)
 
+    df.to_csv("progress.csv", index=False)
+
     logger.info("-" * 50)
-    logger.info("** DONE **")
+    logger.info("** OVERLAY TIME **")
     logger.info("-" * 50)
 
     # then combine overlays (this part might make me cry but we've made a lot of progress today)
+    df = _overlay_images(df, output_dir)
 
