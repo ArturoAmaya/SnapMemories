@@ -451,7 +451,9 @@ def get_image_dims(file_path):
 def _overlay_images(df:pd.DataFrame, output_dir_str: str):
     output_dir = Path(output_dir_str)
     # Find all potential overlay files (*_1.png and *_2.png)
-    overlay_files = list(output_dir.glob("*_1.webp")) + list(output_dir.glob("*_2.webp")) + list(output_dir.glob("*_1.png")) + list(output_dir.glob("*_2.png")) # TODO should change this to be dataframe based so we can track progress
+    #overlay_files = list(output_dir.glob("*_1.webp")) + list(output_dir.glob("*_2.webp")) + list(output_dir.glob("*_1.png")) + list(output_dir.glob("*_2.png")) # now that this is dataframe based we can just split the dataframe into chunks
+    overlay_fileslol = list(df[df["file_path"].str.endswith('_1.webp', na=False)]["file_path"]) + list(df[df["file_path"].str.endswith('_2.webp', na=False)]["file_path"]) + list(df[df["file_path"].str.endswith('_1.png', na=False)]["file_path"]) + list(df[df["file_path"].str.endswith('_2.png', na=False)]["file_path"])
+    overlay_files = [Path(p) for p in overlay_fileslol]
     
     with logging_redirect_tqdm():
         with tqdm(total=len(overlay_files), desc="Creating overlays") as pbar:
