@@ -335,6 +335,11 @@ def _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon):
         "CreateDate": exif_datetime_format,  # XMP/QuickTime tag (useful for MP4)
         "ModifyDate": exif_datetime_format,  # Update the file modification date
 
+        # Ok so apparently QuickTime times are UTC so that means no -8, -5 +4 whatever. bake it in to the string, ie. use the original that we had
+        "QuickTime:CreateDate": dt_object.strftime("%Y:%m:%d %H:%M:%S"),
+        "QuickTime:ModifyDate": dt_object.strftime("%Y:%m:%d %H:%M:%S"),
+        # hopefully these don't fuck up images. seems like this works with Google Photos without modifying anything else
+
         # GPS tags (ExifTool automatically calculates DMS from decimal degrees)
         "XMP:GPSLatitude": lat,
         "XMP:GPSLongitude": lon,
@@ -349,6 +354,12 @@ def _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon):
         # **CRITICAL for MP4 (QuickTime/XMP)** Mac and iPhone still don't show location of video! Need fix!
         "GPSCoordinates": gps_coordinate_string,  # Writes location in one tag for QuickTime/XMP
         "Location": gps_coordinate_string,  # Used by some readers
+        "UserData:GPSCoordinates": f"{lat:+08.4f}{lon:+09.4f}/", # userdata and quicktime have been added to hopefully fix google photos but keys was the key one
+        "QuickTime:GPSCoordinates": f"{lat:+08.4f}{lon:+09.4f}/",
+        "Keys:GPSCoordinates": f"{lat:+08.4f}{lon:+09.4f}/" # THIS IS THE QUICKTIME FIX!!! still doesn't work for google photos though (it's also freaking out with the time when I upload from safari)
+        # TODO: invesigate why sometimes this does or does not work. I have a video where the extracted mp4 doesnt have a location but the overlayed mp4 (which copies very explicitly from the extracted mp4 does (with apple photos, google photos is still a weirdo)*shrug*)
+        # on the positive side at least the jpegs aren't affected by this keys stuff. Seems that adding the userdata and quicktime entires fixed the location consistency
+
     }
 
     # Apply Metadata using pyexiftool
@@ -482,12 +493,19 @@ def _overlay_images(df:pd.DataFrame, output_dir_str: str):
                     # Copy Metadata via ExifTool
                     subprocess.run([
                         "exiftool", "-overwrite_original", "-tagsFromFile", str(bg_file),
-                        "-d", "%Y:%m:%d %H:%M:%S%:z", "-all:all",
+                        "-d", "%Y:%m:%d %H:%M:%S%:z", "-All:All",
                         "-DateTimeOriginal<DateTimeOriginal", "-CreateDate<CreateDate",
                         "-ModifyDate<ModifyDate", "-FileModifyDate<FileModifyDate",
                         "-OffsetTime<OffsetTime", "-OffsetTimeOriginal<OffsetTimeOriginal",
                         "-OffsetTimeDigitized<OffsetTimeDigitized", str(output_path)
                     ])
+                    try:
+                        # Set both access time and modification time to the capture time
+                        unix_timestamp = os.path.getmtime(str(bg_file))
+                        os.utime(str(output_path), (unix_timestamp, unix_timestamp))
+                        logger.debug(f"OS Filesystem timestamps updated: '{os.path.basename(str(output_path))}'")
+                    except Exception as e:
+                        logger.error(f"Failed to update filesystem time for {str(output_path)}: {e}")
 
                 else:
                     # --- VIDEO WORKFLOW ---
@@ -511,7 +529,14 @@ def _overlay_images(df:pd.DataFrame, output_dir_str: str):
                         "exiftool", "-overwrite_original", "-tagsFromFile", 
                         str(bg_file), "-All:All", str(output_path)
                     ])
-                    
+                    # TODO write in the OS-timestamp
+                    try:
+                        # Set both access time and modification time to the capture time
+                        unix_timestamp = os.path.getmtime(str(bg_file))
+                        os.utime(str(output_path), (unix_timestamp, unix_timestamp))
+                        logger.debug(f"OS Filesystem timestamps updated: '{os.path.basename(str(output_path))}'")
+                    except Exception as e:
+                        logger.error(f"Failed to update filesystem time for {str(output_path)}: {e}")
                     if os.path.exists(temp_overlay):
                         os.remove(temp_overlay)
                 pbar.update(1)
