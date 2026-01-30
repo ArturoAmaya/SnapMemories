@@ -16,6 +16,7 @@ from timezonefinder import TimezoneFinder
 import subprocess
 import glob
 from pathlib import Path
+import time
 
 
 logger = logging.getLogger(__file__)
@@ -178,6 +179,7 @@ def _unzips(df:pd.DataFrame, output_dir:str):
                         shutil.rmtree(temp_extract_dir)
                         logger.debug(f"Deleted temporary folder: {temp_extract_dir}")
                     pbar.update(1)
+                    time.sleep(0.1)
     if errors:
         print(f"\nFinished with {len(errors)} failures.")
     for new_row in new_rows:
@@ -227,6 +229,7 @@ def download_dataframe_chunks(chunk:pd.DataFrame, output_dir:str, counter, error
         finally:
             # Increment the shared counter by 1
             counter.value += 1
+            time.sleep(0.1)
     return chunk
     
     #def download_row(row, output_dir):
@@ -369,7 +372,7 @@ def _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon):
             # The execute method is used for writing. It handles escaping and execution.
             # -overwrite_original tells ExifTool to directly modify the file.
             et.execute(
-                "-overwrite_original",
+                "-overwrite_original", "-q",
                 # Map Python dictionary keys/values to ExifTool -TAG=VALUE format
                 *[f"-{k}={v}" for k, v in metadata_tags.items()],
                 file_path,
@@ -396,6 +399,39 @@ def _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon):
     except Exception as e:
         logger.error(f"Failed to update filesystem time for {file_path}: {e}")
 
+def _update_memories_metadata_chunks(df:pd.DataFrame, counter, error_log):
+    """Update the metadata using the time and location"""
+    not_zips = df[(df["zip"]==False) & (df["metadata_updated"]==False)]
+    total_updates = len(not_zips)
+    completed_updates = 0
+
+    for i, row in not_zips.iterrows():
+        try:
+            file_path = row["file_path"]
+            timestamp_str = row["epoch_str"]
+            lat = row["lat"]
+            lon = row["long"]
+            base_file_path = os.path.basename(file_path)
+
+            # Updating media
+            _update_media_metadata_pyexiftool(file_path, timestamp_str, lat, lon)
+
+            completed_updates += 1
+            logger.info(f"[{completed_updates}/{total_updates}] Successfully updated: '{base_file_path}'")
+            # TODO: update the dataframe would be nice here
+            not_zips.at[i, "metadata_updated"] = True #type:ignore
+        except Exception as e:
+            logger.error(f"Error updating {file_path}, {timestamp_str}")
+            error_info = {
+                "file_name": row.get("file_name", "Unknown"),
+                "error": str(e),
+            }
+            error_log.append(error_info)
+        finally:
+            counter.value += 1
+            time.sleep(0.1)
+    df.update(not_zips)
+    return df
 
 def _update_memories_metadata(df:pd.DataFrame):
     """Update the metadata using the time and location"""
@@ -439,6 +475,7 @@ def _update_memories_metadata(df:pd.DataFrame):
                     logger.error(f"Error updating {file_path}, {timestamp_str}")
                 finally:
                     pbar.update(1)
+                    time.sleep(0.1)
     df.update(not_zips)
     return df
 
@@ -447,6 +484,118 @@ def get_image_dims(file_path):
     cmd = ["magick", "identify", "-format", "%wx%h", str(file_path)]
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.stdout.strip()
+
+def overlay_images_chunks(chunk:pd.DataFrame, output_dir_str: str, shared_counter, shared_error_log):
+    output_dir = Path(output_dir_str)
+    # Find all potential overlay files (*_1.png and *_2.png)
+    #overlay_files = list(output_dir.glob("*_1.webp")) + list(output_dir.glob("*_2.webp")) + list(output_dir.glob("*_1.png")) + list(output_dir.glob("*_2.png")) # now that this is dataframe based we can just split the dataframe into chunks
+    overlay_fileslol = list(chunk[chunk["file_path"].str.endswith('_1.webp', na=False)]["file_path"]) + list(chunk[chunk["file_path"].str.endswith('_2.webp', na=False)]["file_path"]) + list(chunk[chunk["file_path"].str.endswith('_1.png', na=False)]["file_path"]) + list(chunk[chunk["file_path"].str.endswith('_2.png', na=False)]["file_path"])
+    overlay_files = [Path(p) for p in overlay_fileslol]
+    
+    for png_file in overlay_files:
+        try:
+            png_path = Path(png_file)
+            # Get base name (e.g., 00011_1760752281000_image_extracted)
+            base = "_".join(png_path.stem.split("_")[:-1])
+            
+            # Look for background files with the same base
+            # Logic: find files starting with base, case-insensitive extensions, excluding itself
+            bg_extensions = ('.jpg', '.jpeg', '.mpg', '.mov', '.mp4')
+            bg_file = None
+            
+            for match in output_dir.glob(f"{base}_*"):
+                if match.suffix.lower() in bg_extensions and match.name != png_file:
+                    bg_file = match
+                    break
+            
+            if not bg_file or not bg_file.exists():
+                print(f"⚠️ Background for {png_file} not found.")
+                continue
+
+            ext = bg_file.suffix.lower()
+            #print(f"🚀 Processing: {png_file} over {bg_file}...")
+
+            if ext in ['.jpg', '.jpeg']:
+                # --- IMAGE WORKFLOW ---
+                output_path = output_dir / f"{base}_merged.jpg"
+                dims = get_image_dims(bg_file)
+                
+                # Composite using ImageMagick
+                # The '!' in resize forces exact dimensions
+                subprocess.run([
+                    "magick", str(bg_file),
+                    "(", str(png_path), "-resize", f"{dims}!", ")",
+                    "-composite", str(output_path)
+                ])
+                
+                # Copy Metadata via ExifTool
+                subprocess.run([
+                    "exiftool", "-q", "-overwrite_original", "-tagsFromFile", str(bg_file),
+                    "-d", "%Y:%m:%d %H:%M:%S%:z", "-All:All",
+                    "-DateTimeOriginal<DateTimeOriginal", "-CreateDate<CreateDate",
+                    "-ModifyDate<ModifyDate", "-FileModifyDate<FileModifyDate",
+                    "-OffsetTime<OffsetTime", "-OffsetTimeOriginal<OffsetTimeOriginal",
+                    "-OffsetTimeDigitized<OffsetTimeDigitized", str(output_path)
+                ])
+                try:
+                    # Set both access time and modification time to the capture time
+                    unix_timestamp = os.path.getmtime(str(bg_file))
+                    os.utime(str(output_path), (unix_timestamp, unix_timestamp))
+                    logger.debug(f"OS Filesystem timestamps updated: '{os.path.basename(str(output_path))}'")
+                except Exception as e:
+                    logger.error(f"Failed to update filesystem time for {str(output_path)}: {e}")
+                    error_info = {
+                        "file_name": str(png_file),
+                        "error": str(e),
+                    }
+                    shared_error_log.append(error_info)
+            else:
+                # --- VIDEO WORKFLOW ---
+                output_path = output_dir / f"{base}_merged.mp4"
+                temp_overlay = f"temp_{os.getpid()}_{Path(png_file).name}"
+                
+                # Create cleaned temp overlay
+                subprocess.run(["magick", str(png_path), temp_overlay])
+                
+                # FFmpeg Overlay
+                subprocess.run([
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-threads", "1",
+                    "-i", str(bg_file), "-i", temp_overlay,
+                    "-filter_complex", "[1:v]scale=rw:rh[ovr];[0:v][ovr]overlay=0:0:format=auto",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "slow", 
+                    "-crf", "18", "-c:a", "copy", str(output_path), "-y"
+                ])
+                
+                # Copy Metadata
+                subprocess.run([
+                    "exiftool", "-q", "-overwrite_original", "-tagsFromFile", 
+                    str(bg_file), "-All:All", str(output_path)
+                ])
+                # TODO write in the OS-timestamp
+                try:
+                    # Set both access time and modification time to the capture time
+                    unix_timestamp = os.path.getmtime(str(bg_file))
+                    os.utime(str(output_path), (unix_timestamp, unix_timestamp))
+                    logger.debug(f"OS Filesystem timestamps updated: '{os.path.basename(str(output_path))}'")
+                except Exception as e:
+                    logger.error(f"Failed to update filesystem time for {str(output_path)}: {e}")
+                    error_info = {
+                    "file_name": str(png_file),
+                    "error": str(e),
+                    }
+                    shared_error_log.append(error_info)
+                if os.path.exists(temp_overlay):
+                    os.remove(temp_overlay)
+        except Exception as e:
+            error_info = {
+                "file_name": str(png_file),
+                "error": str(e),
+            }
+            shared_error_log.append(error_info)
+        finally:
+            shared_counter.value += 1
+            time.sleep(0.1)
+    return chunk
 
 def _overlay_images(df:pd.DataFrame, output_dir_str: str):
     output_dir = Path(output_dir_str)
