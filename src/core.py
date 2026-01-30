@@ -2,7 +2,7 @@ import logging
 import pandas as pd
 import logging
 from io import StringIO
-from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks, _unzips, _update_memories_metadata, _overlay_images
+from src.utils import extract_coordinates, get_downloaded_files, download_dataframe_chunks, _unzips, _update_memories_metadata, _overlay_images, overlay_images_chunks, _update_memories_metadata_chunks, is_actually_webp
 import re
 from bs4 import BeautifulSoup
 import os
@@ -11,6 +11,8 @@ import numpy as np
 from functools import partial
 from tqdm import tqdm
 import multiprocessing
+from tqdm.contrib.logging import logging_redirect_tqdm
+
 
 import warnings
 
@@ -214,6 +216,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
             pbar.update(total_rows - last_val)
     
     results = [f.result() for f in futures]
+    #executor.shutdown(wait=True)
     df.update(pd.concat(results))
     df.sort_values(by='timestamp', ascending=False, inplace=True, ignore_index=True)
     if shared_error_log:
@@ -221,7 +224,7 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
         errors_df = pd.DataFrame(list(shared_error_log))
         errors_df.to_csv("failed_downloads.csv", index=False)
         print("Detailed error log saved to failed_downloads.csv")
-    print(df)
+    #print(df)
     df.to_csv("progress.csv", index=False)
 
     # next you have to extract the zip files
@@ -240,14 +243,91 @@ def download_memories(input_type:str, input_path:str, output_dir:str, pickup:boo
     logger.info("-" * 50)
 
     # Updating media's metadata to fix capture time and location # TODO parallelize this
-    df = _update_memories_metadata(df)
+    #df = _update_memories_metadata(df)
+    # first fix the webps
+    not_zips = df[(df["zip"]==False) & (df["metadata_updated"]==False)]
 
+    with logging_redirect_tqdm():
+        with tqdm(total=len(not_zips), desc="Fixing pngs/webps") as pbar: # TODO fix this total number is wrong that's how many images there are not how many pngs there are
+            for index, row in not_zips.iterrows():
+                old_path = row['file_path']
+                if old_path.endswith('.png') and is_actually_webp(old_path):
+                    new_path = old_path.replace('.png', '.webp')
+                    os.rename(old_path, new_path)
+                    # Update the DataFrame so ExifTool knows the new name
+                    not_zips.at[index, 'file_path'] = new_path #type:ignore
+                pbar.update(1)
+    df.update(not_zips)
+
+    manager = multiprocessing.Manager()
+    shared_counter = manager.Value('i', 0)
+    total_rows = len(not_zips)
+    shared_error_log = manager.list()
+
+    pool_size = min(5, os.cpu_count() - 4) #type:ignore
+    chunks = np.array_split(not_zips, pool_size)
+
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(_update_memories_metadata_chunks, c , shared_counter, shared_error_log) for c in chunks] #type:ignore
+        with tqdm(total=total_rows, desc="Updating Metadata") as pbar:
+            last_val = 0
+            # While any worker is still running
+            while any(f.running() for f in futures):
+                current_val = shared_counter.value
+                pbar.set_postfix({"failed": len(shared_error_log)})
+                pbar.update(current_val - last_val)
+                last_val = current_val
+            
+            # Final update to hit 100%
+            pbar.update(total_rows - last_val)
+
+    results = [f.result() for f in futures]
+    #executor.shutdown(wait=True)
+    df.update(pd.concat(results))
     df.to_csv("progress.csv", index=False)
+    if shared_error_log:
+        print(f"\n⚠️ {len(shared_error_log)} metadata updates failed.")
+        errors_df = pd.DataFrame(list(shared_error_log))
+        errors_df.to_csv("failed_metadata.csv", index=False)
+        print("Detailed error log saved to failed_metadata.csv")
 
     logger.info("-" * 50)
     logger.info("** OVERLAY TIME **")
     logger.info("-" * 50)
 
     # then combine overlays (this part might make me cry but we've made a lot of progress today)
-    df = _overlay_images(df, output_dir)
+    # let's try this parallel
+    #df = _overlay_images(df, output_dir)
+    manager = multiprocessing.Manager()
+    shared_counter = manager.Value('i', 0)
+    total_rows = len(df) # only zips have overlays to be made
+    shared_error_log = manager.list()
+
+    pool_size = min(4, os.cpu_count() - 4) # type: ignore idk I don't want to use the whole machine
+    chunks = np.array_split(df, pool_size)
+
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(overlay_images_chunks, c, output_dir, shared_counter, shared_error_log) for c in chunks] #type:ignore
+        with tqdm(total=total_rows, desc="Creating Overlays") as pbar:
+            last_val = 0
+            while any(f.running() for f in futures):
+                current_val = shared_counter.value
+                pbar.set_postfix({"failed": len(shared_error_log)})
+                pbar.update(current_val-last_val)
+                last_val = current_val
+            pbar.update(total_rows - last_val)
+    
+    results = [f.result() for f in futures]
+    executor.shutdown(wait=True)
+    df.update(pd.concat(results))
+    df.sort_values(by='timestamp', ascending=False, inplace=True, ignore_index=True)
+    if shared_error_log:
+        print(f"\n⚠️ {len(shared_error_log)} downloads failed.")
+        errors_df = pd.DataFrame(list(shared_error_log))
+        errors_df.to_csv("failed_overlays.csv", index=False)
+        print("Detailed error log saved to failed_overlays.csv")
+    #print(df)
+    df.to_csv("progress.csv", index=False)
+    logger.info("DONE!")
+
 
